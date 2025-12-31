@@ -103,6 +103,26 @@ export const useProjectStore = defineStore('projects', () => {
     }
   }
 
+  async function pauseProject(id) {
+    try {
+      await api.pauseProject(id)
+      useNotification().info('项目已暂停')
+    } catch (error) {
+      useNotification().error('暂停项目失败')
+      throw error
+    }
+  }
+
+  async function resumeProject(id) {
+    try {
+      await api.resumeProject(id)
+      useNotification().success('项目已恢复运行')
+    } catch (error) {
+      useNotification().error('恢复项目失败')
+      throw error
+    }
+  }
+
   // WebSocket message handlers
   function addMessage(msg) {
     messages.value.push({
@@ -123,7 +143,8 @@ export const useProjectStore = defineStore('projects', () => {
   function addLLMCall(call) {
     llmCalls.value.push({
       ...call,
-      id: Date.now() + Math.random(),
+      // 保留服务器提供的 id，如果没有则生成临时 id
+      id: call.id || `temp_${Date.now()}`,
       timestamp: call.timestamp || new Date().toISOString(),
     })
   }
@@ -225,6 +246,8 @@ export const useProjectStore = defineStore('projects', () => {
     deleteProject,
     startProject,
     stopProject,
+    pauseProject,
+    resumeProject,
     addMessage,
     addThinking,
     addLLMCall,

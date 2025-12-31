@@ -453,14 +453,16 @@ class RoleZero(Role):
         example = self.experience_retriever.retrieve(context=context)
         return example
 
-    async def ask_human(self, question: str) -> str:
+    async def ask_human(self, question: str = "", message: str = "") -> str:
         """Use this when you fail the current task or if you are unsure of the situation encountered. Your response should contain a brief summary of your situation, ended with a clear and concise question."""
         # NOTE: Can be overwritten in remote setting
+        # 兼容 LLM 生成 message 而非 question 的情况
+        actual_question = question or message
         from metagpt.environment.mgx.mgx_env import MGXEnv  # avoid circular import
 
         if not isinstance(self.rc.env, MGXEnv):
             return "Not in MGXEnv, command will not be executed."
-        return await self.rc.env.ask_human(question, sent_from=self)
+        return await self.rc.env.ask_human(actual_question, sent_from=self)
 
     async def reply_to_human(self, content: str) -> str:
         """Reply to human user with the content provided. Use this when you have a clear answer or solution to the user's question."""

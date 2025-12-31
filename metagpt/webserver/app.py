@@ -6,6 +6,7 @@ MetaGPT Web Server 主应用
 """
 
 import asyncio
+import json
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -129,6 +130,9 @@ class ProjectManager_:
             "output_path": "",
             "error_message": "",
             "messages": [],  # 存储所有消息历史
+            "llm_call_count": 0,  # LLM 调用计数
+            "detected_project_dir": "",  # 检测到的项目目录
+            "is_paused": False,  # 是否暂停
             "team": None,
             "context": None,
         }
@@ -192,6 +196,170 @@ class ProjectManager_:
 
 # 全局项目管理器实例
 project_manager = ProjectManager_()
+
+
+# ============ LLM 调用记录管理 ============
+
+
+def get_llm_logs_dir(project_id: str) -> Path:
+    """获取项目的 LLM 日志目录
+    
+    优先使用项目实际输出目录，否则使用临时目录
+    """
+    project_data = project_manager.get_project(project_id)
+    
+    # 优先使用检测到的项目目录
+    if project_data and project_data.get("detected_project_dir"):
+        project_dir = Path(project_data["detected_project_dir"])
+        llm_dir = project_dir / ".metagpt" / "llm_calls"
+    else:
+        # 临时目录
+        workspace = Path.cwd() / "workspace"
+        llm_dir = workspace / f".metagpt_temp_{project_id}" / "llm_calls"
+    
+    llm_dir.mkdir(parents=True, exist_ok=True)
+    return llm_dir
+
+
+def detect_project_dir_from_path(file_path: str) -> Optional[str]:
+    """从文件路径检测项目目录
+    
+    例如: /workspace/tetris_game/src/main.js -> /workspace/tetris_game
+    注意: /workspace/some_file.md -> None (直接在 workspace 下的文件不算项目)
+    """
+    if not file_path:
+        return None
+    
+    path = Path(file_path)
+    workspace = Path.cwd() / "workspace"
+    
+    # 检查路径是否在 workspace 下
+    try:
+        rel_path = path.relative_to(workspace)
+        parts = rel_path.parts
+        
+        # 至少需要两级路径 (项目目录/文件)，否则文件直接在 workspace 下
+        if len(parts) < 2:
+            return None
+        
+        # 第一级就是项目目录
+        project_name = parts[0]
+        if project_name and not project_name.startswith("."):
+            project_dir = workspace / project_name
+            # 确保是目录而不是文件
+            if project_dir.is_dir():
+                return str(project_dir)
+            # 如果目录还不存在（即将创建），也返回
+            if not project_dir.exists():
+                return str(project_dir)
+    except ValueError:
+        pass
+    
+    return None
+
+
+def update_project_dir(project_id: str, file_path: str):
+    """根据文件写入路径更新项目目录，并迁移已有的 LLM 日志"""
+    project_data = project_manager.get_project(project_id)
+    if not project_data:
+        return
+    
+    # 已经检测到了，不需要再更新
+    if project_data.get("detected_project_dir"):
+        return
+    
+    detected_dir = detect_project_dir_from_path(file_path)
+    if not detected_dir:
+        return
+    
+    # 检查是否有临时日志需要迁移
+    workspace = Path.cwd() / "workspace"
+    temp_dir = workspace / f".metagpt_temp_{project_id}" / "llm_calls"
+    new_dir = Path(detected_dir) / ".metagpt" / "llm_calls"
+    
+    if temp_dir.exists():
+        new_dir.mkdir(parents=True, exist_ok=True)
+        # 迁移文件
+        for f in temp_dir.glob("*.json"):
+            new_path = new_dir / f.name
+            if not new_path.exists():
+                f.rename(new_path)
+        # 清理临时目录
+        try:
+            temp_dir.rmdir()
+            temp_dir.parent.rmdir()
+        except OSError:
+            pass
+    
+    project_data["detected_project_dir"] = detected_dir
+    logger.info(f"Detected project directory: {detected_dir}")
+
+
+def save_llm_call(project_id: str, call_data: dict) -> str:
+    """保存 LLM 调用记录到文件，返回调用ID"""
+    llm_dir = get_llm_logs_dir(project_id)
+    
+    # 生成唯一ID (时间戳 + 序号)
+    project_data = project_manager.get_project(project_id)
+    call_index = project_data.get("llm_call_count", 0) + 1
+    project_data["llm_call_count"] = call_index
+    
+    call_id = f"{call_index:04d}"
+    call_data["id"] = call_id
+    call_data["index"] = call_index
+    
+    # 保存到文件
+    file_path = llm_dir / f"{call_id}.json"
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(call_data, f, ensure_ascii=False, indent=2)
+    
+    return call_id
+
+
+def get_llm_call(project_id: str, call_id: str) -> Optional[dict]:
+    """读取单个 LLM 调用记录"""
+    llm_dir = get_llm_logs_dir(project_id)
+    file_path = llm_dir / f"{call_id}.json"
+    
+    if not file_path.exists():
+        return None
+    
+    with open(file_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def list_llm_calls(project_id: str) -> List[dict]:
+    """列出项目的所有 LLM 调用记录（仅摘要信息）"""
+    llm_dir = get_llm_logs_dir(project_id)
+    
+    if not llm_dir.exists():
+        return []
+    
+    calls = []
+    for file_path in sorted(llm_dir.glob("*.json")):
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # 只返回摘要信息
+            calls.append({
+                "id": data.get("id"),
+                "index": data.get("index"),
+                "agent_name": data.get("agent_name"),
+                "model": data.get("model"),
+                "timestamp": data.get("timestamp"),
+                "prompt_preview": data.get("prompt", "")[:100],
+                "response_preview": data.get("response", "")[:100],
+            })
+    
+    return calls
+
+
+def get_llm_call_count(project_id: str) -> int:
+    """获取 LLM 调用总数"""
+    project_data = project_manager.get_project(project_id)
+    if project_data:
+        return project_data.get("llm_call_count", 0)
+    return 0
+
 
 # ============ FastAPI 应用 ============
 
@@ -359,10 +527,57 @@ async def stop_project(project_id: str):
         project_data = project_manager.get_project(project_id)
         if project_data:
             project_data["status"] = "stopped"
+            project_data["is_paused"] = False
 
         return {"message": "Project stopped", "project_id": project_id}
 
     raise HTTPException(status_code=400, detail="Project is not running")
+
+
+@app.post("/api/projects/{project_id}/pause")
+async def pause_project(project_id: str):
+    """暂停运行中的项目"""
+    project_data = project_manager.get_project(project_id)
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if project_data["status"] != "running":
+        raise HTTPException(status_code=400, detail="Project is not running")
+
+    project_data["is_paused"] = True
+    project_data["status"] = "paused"
+    
+    # 广播状态变更
+    await project_manager.broadcast(project_id, {
+        "type": "project_status",
+        "status": "paused",
+        "message": "项目已暂停",
+    })
+
+    return {"message": "Project paused", "project_id": project_id}
+
+
+@app.post("/api/projects/{project_id}/resume")
+async def resume_project(project_id: str):
+    """恢复暂停的项目"""
+    project_data = project_manager.get_project(project_id)
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if project_data["status"] != "paused":
+        raise HTTPException(status_code=400, detail="Project is not paused")
+
+    project_data["is_paused"] = False
+    project_data["status"] = "running"
+    
+    # 广播状态变更
+    await project_manager.broadcast(project_id, {
+        "type": "project_status",
+        "status": "running",
+        "message": "项目已恢复运行",
+    })
+
+    return {"message": "Project resumed", "project_id": project_id}
 
 
 @app.get("/api/projects/{project_id}/messages")
@@ -373,6 +588,44 @@ async def get_project_messages(project_id: str):
         raise HTTPException(status_code=404, detail="Project not found")
 
     return {"messages": project_data.get("messages", [])}
+
+
+@app.get("/api/projects/{project_id}/llm-calls")
+async def get_llm_calls_list(project_id: str):
+    """获取项目的所有 LLM 调用记录列表（摘要）"""
+    project_data = project_manager.get_project(project_id)
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    calls = list_llm_calls(project_id)
+    return {
+        "total_count": len(calls),
+        "calls": calls,
+    }
+
+
+@app.get("/api/projects/{project_id}/llm-calls/{call_id}")
+async def get_llm_call_detail(project_id: str, call_id: str):
+    """获取单个 LLM 调用的完整详情"""
+    project_data = project_manager.get_project(project_id)
+    if not project_data:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    call_data = get_llm_call(project_id, call_id)
+    if not call_data:
+        raise HTTPException(status_code=404, detail="LLM call not found")
+
+    # 添加上下文信息
+    total_count = get_llm_call_count(project_id)
+    call_index = int(call_id)
+    
+    call_data["has_prev"] = call_index > 1
+    call_data["has_next"] = call_index < total_count
+    call_data["prev_id"] = f"{call_index - 1:04d}" if call_index > 1 else None
+    call_data["next_id"] = f"{call_index + 1:04d}" if call_index < total_count else None
+    call_data["total_count"] = total_count
+
+    return call_data
 
 
 # ============ 项目运行逻辑 ============
@@ -415,11 +668,41 @@ async def run_project(project_id: str):
     async def on_llm_call(data: dict):
         """LLM调用回调"""
         data["timestamp"] = datetime.now().isoformat()
+        # 保存到文件
+        call_id = save_llm_call(project_id, data)
+        data["id"] = call_id
+        data["total_count"] = get_llm_call_count(project_id)
         await project_manager.broadcast(project_id, data)
 
     async def on_tool_usage(data: dict):
         """工具使用回调"""
         data["timestamp"] = datetime.now().isoformat()
+        
+        # 从工具调用中检测项目目录（如 write_files 等）
+        tool_name = data.get("tool_name", "")
+        args = data.get("args", {})
+        
+        # 检测文件路径
+        file_path = None
+        if "path" in args:
+            file_path = args["path"]
+        elif "file_path" in args:
+            file_path = args["file_path"]
+        elif "filename" in args:
+            file_path = args["filename"]
+        elif isinstance(args, dict):
+            # 检查 files 列表中的路径
+            files = args.get("files", [])
+            if files and isinstance(files, list) and len(files) > 0:
+                first_file = files[0]
+                if isinstance(first_file, dict):
+                    file_path = first_file.get("path") or first_file.get("file_path")
+                elif isinstance(first_file, str):
+                    file_path = first_file
+        
+        if file_path:
+            update_project_dir(project_id, file_path)
+        
         await project_manager.broadcast(project_id, data)
 
     async def on_cost_update(data: dict):
@@ -495,34 +778,64 @@ async def run_project(project_id: str):
             original_aask = role.llm.aask
             
             async def wrapped_aask(msg, system_msgs=None, format_msgs=None, images=None, timeout=None, stream=None, **kwargs):
-                # 构建 prompt 摘要
+                # 构建完整的消息列表（用于保存到文件）
+                full_messages = []
+                
+                # 添加系统消息
+                if system_msgs:
+                    for sys_msg in system_msgs:
+                        if isinstance(sys_msg, str):
+                            full_messages.append({"role": "system", "content": sys_msg})
+                        else:
+                            full_messages.append(sys_msg)
+                
+                # 添加用户消息
                 if isinstance(msg, str):
-                    prompt_summary = msg[:300] if len(msg) > 300 else msg
+                    full_messages.append({"role": "user", "content": msg})
                 elif isinstance(msg, list):
-                    # 提取最后一条用户消息
-                    user_msgs = [m.get('content', '') for m in msg if m.get('role') == 'user']
-                    prompt_summary = user_msgs[-1][:300] if user_msgs else str(msg)[:300]
+                    full_messages.extend(msg)
                 else:
-                    prompt_summary = str(msg)[:300]
+                    full_messages.append({"role": "user", "content": str(msg)})
+                
+                # 记录调用前的 token 数
+                cost_manager = company.cost_manager
+                tokens_before_prompt = cost_manager.total_prompt_tokens if cost_manager else 0
+                tokens_before_completion = cost_manager.total_completion_tokens if cost_manager else 0
                 
                 # 调用原始方法
                 result = await original_aask(msg, system_msgs, format_msgs, images, timeout, stream, **kwargs)
                 
-                # 获取花费信息
-                cost_manager = company.cost_manager
+                # 计算本次调用的 token 数
+                tokens_after_prompt = cost_manager.total_prompt_tokens if cost_manager else 0
+                tokens_after_completion = cost_manager.total_completion_tokens if cost_manager else 0
+                this_call_prompt_tokens = tokens_after_prompt - tokens_before_prompt
+                this_call_completion_tokens = tokens_after_completion - tokens_before_completion
+                
                 total_cost = cost_manager.total_cost if cost_manager else 0
                 
-                # 推送 LLM 调用信息
+                # 生成摘要（用于前端实时显示）
+                prompt_preview = ""
+                if full_messages:
+                    last_user = next((m["content"] for m in reversed(full_messages) if m.get("role") == "user"), "")
+                    prompt_preview = last_user[:200] if len(last_user) > 200 else last_user
+                
+                # 推送 LLM 调用信息（完整数据保存到文件，摘要发送到前端）
                 await on_llm_call({
                     "type": "llm_call",
                     "agent_name": role_name,
                     "model": getattr(role.llm.config, 'model', 'unknown'),
-                    "prompt": prompt_summary,
+                    # 完整数据（保存到文件）
+                    "full_messages": full_messages,  # 完整的消息历史
+                    "full_response": result,          # 完整的响应
+                    # 摘要数据（发送到前端实时显示）
+                    "prompt": prompt_preview,
                     "response": result[:500] if result else "",
-                    "cost": 0,  # 单次调用花费难以精确计算
+                    # Token 和花费信息
                     "tokens": {
-                        "prompt": cost_manager.total_prompt_tokens if cost_manager else 0,
-                        "completion": cost_manager.total_completion_tokens if cost_manager else 0,
+                        "prompt": this_call_prompt_tokens,
+                        "completion": this_call_completion_tokens,
+                        "total_prompt": tokens_after_prompt,
+                        "total_completion": tokens_after_completion,
                     },
                     "total_cost": total_cost,
                 })
@@ -599,6 +912,11 @@ async def run_project(project_id: str):
         max_idle_rounds = 3  # 连续3轮都 idle 才退出
         
         for round_num in range(1, n_round + 1):
+            # 检查是否暂停
+            while project_data.get("is_paused", False):
+                logger.debug("Project paused, waiting...")
+                await asyncio.sleep(0.5)  # 暂停时每0.5秒检查一次
+            
             # 检查预算
             if company.cost_manager.total_cost >= company.cost_manager.max_budget:
                 logger.warning("Budget exceeded, stopping project")

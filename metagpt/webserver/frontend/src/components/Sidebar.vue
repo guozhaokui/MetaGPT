@@ -32,7 +32,45 @@
         >
           <div class="project-item-header">
             <span class="project-item-name">{{ project.name }}</span>
-            <span class="status-dot" :class="project.status"></span>
+            <div class="project-actions">
+              <!-- 运行按钮 -->
+              <button
+                v-if="project.status === 'created' || project.status === 'stopped'"
+                class="action-btn run"
+                @click.stop="startProject(project.id)"
+                title="运行项目"
+              >
+                ▶
+              </button>
+              <!-- 暂停按钮 -->
+              <button
+                v-if="project.status === 'running'"
+                class="action-btn pause"
+                @click.stop="pauseProject(project.id)"
+                title="暂停项目"
+              >
+                ⏸
+              </button>
+              <!-- 继续按钮 -->
+              <button
+                v-if="project.status === 'paused'"
+                class="action-btn resume"
+                @click.stop="resumeProject(project.id)"
+                title="继续运行"
+              >
+                ▶
+              </button>
+              <!-- 停止按钮（运行中或暂停时可用） -->
+              <button
+                v-if="project.status === 'running' || project.status === 'paused'"
+                class="action-btn stop"
+                @click.stop="stopProject(project.id)"
+                title="停止项目"
+              >
+                ⏹
+              </button>
+              <span class="status-dot" :class="project.status"></span>
+            </div>
           </div>
           <div class="project-item-meta">
             <span class="cost">${{ (project.total_cost || 0).toFixed(2) }}</span>
@@ -106,6 +144,7 @@ const statusText = (status) => {
   const map = {
     created: '已创建',
     running: '运行中',
+    paused: '已暂停',
     completed: '已完成',
     failed: '失败',
     stopped: '已停止',
@@ -115,6 +154,42 @@ const statusText = (status) => {
 
 const selectProject = (id) => {
   router.push(`/project/${id}`)
+}
+
+const startProject = async (id) => {
+  try {
+    await projectStore.startProject(id)
+    // 如果不是当前项目，跳转过去
+    if (id !== projectStore.currentProjectId) {
+      router.push(`/project/${id}`)
+    }
+  } catch (error) {
+    console.error('Start project failed:', error)
+  }
+}
+
+const stopProject = async (id) => {
+  try {
+    await projectStore.stopProject(id)
+  } catch (error) {
+    console.error('Stop project failed:', error)
+  }
+}
+
+const pauseProject = async (id) => {
+  try {
+    await projectStore.pauseProject(id)
+  } catch (error) {
+    console.error('Pause project failed:', error)
+  }
+}
+
+const resumeProject = async (id) => {
+  try {
+    await projectStore.resumeProject(id)
+  } catch (error) {
+    console.error('Resume project failed:', error)
+  }
 }
 
 onMounted(() => {
@@ -243,7 +318,74 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 180px;
+  max-width: 140px;
+}
+
+.project-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.action-btn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition-fast);
+  opacity: 0;
+
+  .project-item:hover & {
+    opacity: 1;
+  }
+
+  &.run {
+    background: rgba(63, 185, 80, 0.2);
+    color: var(--accent-success);
+
+    &:hover {
+      background: rgba(63, 185, 80, 0.4);
+      transform: scale(1.1);
+    }
+  }
+
+  &.pause {
+    background: rgba(255, 166, 87, 0.2);
+    color: var(--accent-warning);
+    opacity: 1;
+
+    &:hover {
+      background: rgba(255, 166, 87, 0.4);
+      transform: scale(1.1);
+    }
+  }
+
+  &.resume {
+    background: rgba(63, 185, 80, 0.2);
+    color: var(--accent-success);
+    opacity: 1;
+
+    &:hover {
+      background: rgba(63, 185, 80, 0.4);
+      transform: scale(1.1);
+    }
+  }
+
+  &.stop {
+    background: rgba(248, 81, 73, 0.2);
+    color: var(--accent-danger);
+    opacity: 1;
+
+    &:hover {
+      background: rgba(248, 81, 73, 0.4);
+      transform: scale(1.1);
+    }
+  }
 }
 
 .status-dot {
@@ -254,9 +396,10 @@ onMounted(() => {
 
   &.created { background: var(--text-muted); }
   &.running { background: var(--accent-primary); animation: pulse 1.5s infinite; }
+  &.paused { background: var(--accent-warning); }
   &.completed { background: var(--accent-success); }
   &.failed { background: var(--accent-danger); }
-  &.stopped { background: var(--accent-warning); }
+  &.stopped { background: #6e7681; }
 }
 
 @keyframes pulse {

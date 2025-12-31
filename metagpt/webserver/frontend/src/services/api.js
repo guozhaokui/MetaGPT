@@ -75,6 +75,20 @@ export default {
     })
   },
 
+  // 暂停项目
+  pauseProject(id) {
+    return request(`/projects/${id}/pause`, {
+      method: 'POST',
+    })
+  },
+
+  // 恢复项目
+  resumeProject(id) {
+    return request(`/projects/${id}/resume`, {
+      method: 'POST',
+    })
+  },
+
   // 获取消息历史
   getMessages(id) {
     return request(`/projects/${id}/messages`)

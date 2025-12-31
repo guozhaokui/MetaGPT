@@ -88,6 +88,7 @@
       <LLMPanel
         title="🤖 LLM 调用"
         :calls="projectStore.llmCalls"
+        :project-id="project.id"
       />
     </section>
   </div>

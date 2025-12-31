@@ -70,15 +70,8 @@ export function useWebSocket() {
         break
 
       case 'llm_call':
-        // LLM调用记录
-        projectStore.addLLMCall({
-          agent_name: data.agent_name,
-          model: data.model,
-          prompt: data.prompt,
-          response: data.response,
-          cost: data.cost,
-          tokens: data.tokens,
-        })
+        // LLM调用记录 - 传递完整数据（包括 full_messages, full_response 等）
+        projectStore.addLLMCall(data)
         // 同时更新花费
         if (data.total_cost !== undefined) {
           projectStore.updateCost(data.total_cost)
